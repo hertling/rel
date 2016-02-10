@@ -1,0 +1,181 @@
+#!/usr/bin/env ruby
+
+def print_help
+  puts
+  puts "USAGE:"
+  puts "rel is a utility to run commands against multiple projects."
+  puts "example usage:"
+  puts "  rel git pull"
+  puts
+  puts "FILE FORMAT:"
+  puts "rel depends on the .related_projects file in the current directory."
+  puts "The .related_projects file consists of one project per line,"
+  puts "corresponding to a filesystem folder at the same level as the"
+  puts "current directory*. Example .related_projects content:"
+  puts "  project-one"
+  puts "  project-two"
+  puts "  project-three"
+  puts
+  puts "*See also optional git uri syntax below under --clone command"
+  puts
+  puts "If the .related_projects file consists of only a single line, then"
+  puts "rel will read the .related_projects file from the referenced project"
+  puts "instead. This prevents every project from needing to specify every"
+  puts "other project. For example, project-one can list all the other projects"
+  puts "in its .related_projects file, while the other projects can just list"
+  puts "project-one."
+  puts
+  puts "SPECIAL COMMANDS:"
+  puts "--test: don't run the commands, just show the commands to be run"
+  puts "--genfiles: from a master project, create .related_projects files for related projects"
+  puts "--clone: from a master project, clone all related projects"
+  puts "         requires projects to have syntax 'projectname github-clone-uri' in"
+  puts "         .related_projects and only works from the master project."
+  puts "--update: download an updated version of rel if one is available"
+  puts
+end
+
+def load_clone_urls
+  begin
+      input_projects = File.readlines(".related_projects")
+    rescue Errno::ENOENT
+      puts "ERROR: No .related_projects file found."
+      print_help
+      exit
+    end
+
+    cloneable_projects=[]
+    input_projects.each { |line| cloneable_projects << line.strip.split(" ") if line.strip.size > 0 && line.strip.split(" ").size > 1 }
+
+    if cloneable_projects.size==0
+      puts "ERROR: No cloneable projects defined in .related_projects."
+      print_help
+      exit
+    end
+  cloneable_projects
+end
+
+
+def load_related_projects(dir=".")
+  begin
+    input_projects = File.readlines("#{dir}/.related_projects")
+  rescue Errno::ENOENT
+    puts "ERROR: No .related_projects file found."
+    print_help
+    exit
+  end
+
+  related_projects=[]
+  input_projects.each { |line| related_projects << line.strip.split(" ")[0] if line.strip.size > 0 }
+
+  if related_projects.size==0
+    puts "ERROR: No projects defined in .related_projects."
+    print_help
+    exit
+  end
+
+  if related_projects.size==1 && dir=="."
+    puts "loading second cousins from ../#{related_projects[0]}"
+    second_cousins = load_related_projects("../#{related_projects[0]}")
+    related_projects+=second_cousins
+  end
+
+  # add current directory in case it's not include
+  related_projects << Dir.pwd.split("/").last
+  related_projects.uniq
+end
+
+def check_project_existance(projects)
+  projects.each do |proj|
+    unless File.directory?("../#{proj}")
+      puts "*** WARNING: #{proj} does not exist. Do you need to git clone?" unless ARGV[0]=="--clone"
+    end
+  end
+end
+
+@test_mode = false
+ARGV.each do |arg|
+  if arg == '--test'
+    @test_mode = true
+    ARGV.delete '--test'
+    break
+  end
+end
+
+def system_call command, options = {}
+  cmd = command
+  if options[:cd]
+    cmd = "cd #{options[:cd]} && ( #{cmd} )"
+  end
+  if options[:msg]
+    puts options[:msg]
+  end
+  if @test_mode
+    puts "( #{cmd} )"
+  end
+  if options[:sub_shell]
+    cmd = "bash -ci 'source ~/.profile; shopt -s expand_aliases; #{cmd}'"
+  end
+  system(cmd) unless @test_mode
+end
+
+if ARGV[0]=="--update"
+  path = File.expand_path(File.dirname(__FILE__))
+  system_call "git pull", { sub_shell: true, cd: path }
+  exit
+end
+
+if ARGV[0]=="--coreanapple"
+  cmd = "open https://media.giphy.com/media/i6JLRbk4f2gIU/giphy.gif"
+  system_call cmd, msg: "# #{cmd}"
+  exit
+end
+
+
+command_to_run = ARGV.join(" ")
+
+related_projects = load_related_projects
+
+check_project_existance(related_projects)
+
+if ARGV.size==0
+  puts "No command to run."
+  puts
+  puts "Related projects: \n#{related_projects.join("\n")}"
+  puts
+  print_help
+  exit
+end
+
+
+
+if ARGV[0]=="--genfiles"
+  this_project=Dir.pwd.split("/").last
+  related_projects.each do |proj|
+    unless proj==this_project
+      fname = "../#{proj}/.related_projects"
+      File.open(fname, 'w') {|f| puts "writing #{fname}" ; f.write(this_project) }
+    end
+  end
+  exit
+end
+
+if ARGV[0]=="--clone"
+  clone_projects = load_clone_urls
+  clone_projects.each do |proj, git_uri|
+    if File.directory?("../#{proj}")
+      puts "Skipping #{proj}, as it already exists."
+    else
+      system_arg = "git clone #{git_uri}"
+      system_call system_arg, cd: '..', msg: "# Cloning #{proj} using command: #{system_arg}"
+    end
+  end
+  exit
+end
+
+puts "# Command to run: '#{command_to_run}'"
+related_projects.each do |proj|
+  puts
+  msg="# cd ../#{proj} && ( #{command_to_run} )"
+  system_call "#{command_to_run}", sub_shell: true, cd: "../#{proj}", msg: msg
+end
